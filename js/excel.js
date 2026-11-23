@@ -212,7 +212,9 @@
 
     duplicados(grupos, 'codigo', HOJAS.grupos, 'El código de grupo', resultado, true);
     duplicados(lineas, 'codigo', HOJAS.lineas, 'El código de línea', resultado, true);
-    duplicados(investigadores, 'correo', HOJAS.investigadores, 'El correo', resultado, true);
+    // Una persona puede pertenecer a varios grupos (una fila por grupo): solo se repite si coincide correo y grupo.
+    investigadores.forEach(function (inv) { inv._clave = inv.correo ? inv.correo.toLowerCase() + ' · ' + inv.grupo.toLowerCase() : ''; });
+    duplicados(investigadores, '_clave', HOJAS.investigadores, 'El investigador', resultado, true);
 
     var codigosGrupo = {};
     grupos.forEach(function (g) { codigosGrupo[g.codigo.toLowerCase()] = true; });
@@ -267,7 +269,7 @@
     function sinFila(lista) {
       return lista.map(function (r) {
         var copia = {};
-        Object.keys(r).forEach(function (k) { if (k !== '_fila') copia[k] = r[k]; });
+        Object.keys(r).forEach(function (k) { if (k !== '_fila' && k !== '_clave') copia[k] = r[k]; });
         return copia;
       });
     }
