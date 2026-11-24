@@ -292,13 +292,24 @@
     marco('inicio', [encabezado('Hola, ' + nombre.split(' ')[0], subtituloOrg()), cuerpo]);
   }
 
+  function aLideres(c) {
+    return c.destinatarios === 'lideres' || !(c.investigadores && c.investigadores.length);
+  }
+
   function resumenCifras(c) {
-    var reciben = c.investigadores.filter(function (i) { return i.recibe_correos; }).length;
+    var cifra = function (n, texto) { return el('span', { class: 'cifra' }, [el('strong', { texto: String(n) }), texto]); };
+    if (aLideres(c)) {
+      return el('div', { class: 'cifras' }, [
+        cifra(c.grupos.length, ' grupos'),
+        cifra(c.lineas.length, ' líneas'),
+        cifra(c.grupos.filter(function (g) { return g.lider_correo; }).length, ' líderes reciben correos')
+      ]);
+    }
     return el('div', { class: 'cifras' }, [
-      el('span', { class: 'cifra' }, [el('strong', { texto: String(c.grupos.length) }), ' grupos']),
-      el('span', { class: 'cifra' }, [el('strong', { texto: String(c.lineas.length) }), ' líneas']),
-      el('span', { class: 'cifra' }, [el('strong', { texto: String(c.investigadores.length) }), ' investigadores']),
-      el('span', { class: 'cifra' }, [el('strong', { texto: String(reciben) }), ' reciben correos'])
+      cifra(c.grupos.length, ' grupos'),
+      cifra(c.lineas.length, ' líneas'),
+      cifra(c.investigadores.length, ' investigadores'),
+      cifra(c.investigadores.filter(function (i) { return i.recibe_correos; }).length, ' reciben correos')
     ]);
   }
 
@@ -461,14 +472,15 @@
   }
 
   function tablaGrupos(d) {
-    return tabla('Grupos y líneas', ['Grupo', 'Categoría', 'Líder', 'Líneas'], d.grupos.map(function (g) {
+    return tabla('Grupos y líneas', ['Grupo', 'Facultad', 'Categoría', 'Líder', 'Correo del líder', 'Líneas'], d.grupos.map(function (g) {
       var lineas = d.lineas.filter(function (l) { return l.grupo.toLowerCase() === g.codigo.toLowerCase(); })
         .map(function (l) { return l.codigo + ' ' + l.nombre; }).join(' · ');
-      return [g.codigo + ' · ' + g.nombre, g.categoria || '—', g.lider_nombre, lineas || '—'];
+      return [g.codigo + ' · ' + g.nombre, g.facultad || '—', g.categoria || '—', g.lider_nombre, g.lider_correo, lineas || '—'];
     }));
   }
 
   function tablaInvestigadores(d) {
+    if (aLideres(d)) return null;
     return tabla('Investigadores', ['Nombre', 'Correo', 'Grupo', 'Líneas', 'Recibe correos'], d.investigadores.map(function (i) {
       return [i.nombres + ' ' + i.apellidos, i.correo, i.grupo, i.lineas.join('; '), i.recibe_correos ? 'Sí' : 'No'];
     }));

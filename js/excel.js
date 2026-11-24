@@ -105,9 +105,10 @@
     return MARCAS_EJEMPLO.some(function (m) { return texto.indexOf(m) !== -1; });
   }
 
-  function leerTabla(XLSX, libro, claveHoja, resultado) {
+  function leerTabla(XLSX, libro, claveHoja, resultado, opcional) {
     var nombreHoja = HOJAS[claveHoja];
     var hoja = buscarHoja(libro, nombreHoja);
+    if (!hoja && opcional) return null;
     if (!hoja) {
       resultado.errores.push({ hoja: nombreHoja, mensaje: 'Falta la hoja "' + nombreHoja + '".' });
       return [];
@@ -208,7 +209,11 @@
     var organizacion = leerOrganizacion(XLSX, libro, resultado);
     var grupos = leerTabla(XLSX, libro, 'grupos', resultado);
     var lineas = leerTabla(XLSX, libro, 'lineas', resultado);
-    var investigadores = leerTabla(XLSX, libro, 'investigadores', resultado);
+    // La hoja Investigadores es opcional: sin ella, los correos se envían al líder de cada grupo.
+    var investigadores = leerTabla(XLSX, libro, 'investigadores', resultado, true);
+    // Una hoja sin filas cuenta como no cargada.
+    var conInvestigadores = !!(investigadores && investigadores.length);
+    investigadores = investigadores || [];
 
     duplicados(grupos, 'codigo', HOJAS.grupos, 'El código de grupo', resultado, true);
     duplicados(lineas, 'codigo', HOJAS.lineas, 'El código de línea', resultado, true);
@@ -247,7 +252,7 @@
       }
     });
 
-    lineas.forEach(function (l) {
+    if (conInvestigadores) lineas.forEach(function (l) {
       var tiene = investigadores.some(function (inv) {
         return inv.lineas.some(function (c) { return c.toLowerCase() === l.codigo.toLowerCase(); });
       });
@@ -261,9 +266,6 @@
     }
     if (!resultado.errores.some(function (e) { return e.hoja === HOJAS.lineas; }) && lineas.length === 0) {
       resultado.errores.push({ hoja: HOJAS.lineas, mensaje: 'No hay líneas registradas.' });
-    }
-    if (investigadores.length === 0) {
-      resultado.avisos.push({ hoja: HOJAS.investigadores, mensaje: 'No hay investigadores registrados.' });
     }
 
     function sinFila(lista) {
@@ -279,7 +281,9 @@
       organizacion: organizacion,
       grupos: sinFila(grupos),
       lineas: sinFila(lineas),
-      investigadores: sinFila(investigadores)
+      investigadores: sinFila(investigadores),
+      // Destinatarios de los correos de convocatorias.
+      destinatarios: conInvestigadores ? 'investigadores' : 'lideres'
     };
     return resultado;
   }
