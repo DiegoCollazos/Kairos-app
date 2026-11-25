@@ -83,7 +83,19 @@
     if (e && e.estado === 401) return 'El token no es válido o ya expiró. Cree uno nuevo en GitHub.';
     if (e && e.estado === 403) return 'El token no tiene permiso para esta acción. Revise que tenga acceso de lectura y escritura a "Contents" del repositorio.';
     if (e && e.estado === 404) return 'No se encontró el repositorio, o el token no tiene acceso a él.';
+    if (e && e.estado === -1) return 'El token tiene caracteres no válidos. Cópielo de nuevo desde GitHub, sin espacios ni texto adicional.';
+    if (e && e.estado === 0 && e.sinRed) return 'Este navegador no logra comunicarse con GitHub (api.github.com). Suele deberse a la red (por ejemplo, la red institucional o una VPN que bloquea el sitio), a un bloqueador de anuncios o extensión de privacidad, o a la falta de conexión. Pruebe en una ventana de incógnito o desde otra red, por ejemplo los datos del celular.';
+    if (e && e.estado === 0) return 'GitHub responde, pero rechazó la petición con el token desde este navegador. Pruebe en una ventana de incógnito sin extensiones; si persiste, cree un token nuevo. (Detalle: ' + e.message + ')';
     return 'No se pudo conectar con GitHub' + (e && e.message ? ' (' + e.message + ')' : '') + '.';
+  }
+
+  // Ante un error de red, averigua si GitHub es alcanzable sin token para dar un mensaje útil.
+  function diagnosticar(e) {
+    if (!e || e.estado !== 0) throw e;
+    return KairosGitHub.hayConexion().then(function (ok) {
+      e.sinRed = !ok;
+      throw e;
+    });
   }
 
   /* ---------- vista: entrada ---------- */
@@ -96,11 +108,15 @@
 
     var form = el('form', { class: 'tarjeta', onsubmit: function (ev) {
       ev.preventDefault();
-      var token = inputToken.value.trim();
+      var token = KairosGitHub.limpiarToken(inputToken.value);
       if (!token) return;
+      if (!KairosGitHub.tokenValido(token)) {
+        zonaMensaje.replaceChildren(el('div', { class: 'mensaje mensaje-error', role: 'alert', texto: 'Eso no parece un token de GitHub: debe empezar por "github_pat_" y tener solo letras, números y guiones bajos. Cópielo de nuevo desde GitHub.' }));
+        return;
+      }
       boton.disabled = true;
       boton.textContent = 'Verificando…';
-      entrar(token, null, recordar.checked).catch(function (e) {
+      entrar(token, null, recordar.checked).catch(diagnosticar).catch(function (e) {
         boton.disabled = false;
         boton.textContent = 'Entrar';
         zonaMensaje.replaceChildren(el('div', { class: 'mensaje mensaje-error', role: 'alert', texto: mensajeError(e) }));
@@ -173,7 +189,7 @@
       contenido = [
         el('div', { class: 'campo' }, [el('label', { for: 'repo', texto: 'Repositorio de su organización' }), select]),
         el('button', { class: 'btn', type: 'button', texto: 'Continuar', onclick: function () {
-          elegirRepo(select.value, recordar).catch(function (e) {
+          elegirRepo(select.value, recordar).catch(diagnosticar).catch(function (e) {
             zona.replaceChildren(el('div', { class: 'mensaje mensaje-error', role: 'alert', texto: mensajeError(e) }));
           });
         } })
@@ -189,7 +205,7 @@
             zona.replaceChildren(el('div', { class: 'mensaje mensaje-error', role: 'alert', texto: 'Escriba el repositorio como usuario/nombre.' }));
             return;
           }
-          estado.gh.repo(nombre).then(function () { return elegirRepo(nombre, recordar); }).catch(function (e) {
+          estado.gh.repo(nombre).then(function () { return elegirRepo(nombre, recordar); }).catch(diagnosticar).catch(function (e) {
             zona.replaceChildren(el('div', { class: 'mensaje mensaje-error', role: 'alert', texto: mensajeError(e) }));
           });
         } })
@@ -401,7 +417,7 @@
       var boton = el('button', { class: 'btn', type: 'button', texto: 'Guardar en Kairós', disabled: estado.escritura === false, onclick: function () {
         boton.disabled = true;
         boton.textContent = 'Guardando…';
-        guardar().then(function () {
+        guardar().catch(diagnosticar).then(function () {
           estado.carga = null;
           vistaConfiguracion();
         }, function (e) {
@@ -500,7 +516,7 @@
   var sesion = leerSesion();
   if (sesion && sesion.token) {
     raiz.replaceChildren(el('div', { class: 'vacio', texto: 'Conectando con GitHub…' }));
-    entrar(sesion.token, sesion.repo, !!localStorageTiene()).catch(function (e) {
+    entrar(sesion.token, sesion.repo, !!localStorageTiene()).catch(diagnosticar).catch(function (e) {
       cerrarSesionSilenciosa();
       vistaEntrada(mensajeError(e));
     });

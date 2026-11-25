@@ -17,15 +17,23 @@
   function crear(token) {
     function pedir(ruta, opciones) {
       opciones = opciones || {};
-      return fetch(API + ruta, {
-        method: opciones.method || 'GET',
-        headers: {
-          'Accept': 'application/vnd.github+json',
-          'Authorization': 'Bearer ' + token,
-          'X-GitHub-Api-Version': '2022-11-28',
-          'Content-Type': 'application/json'
-        },
-        body: opciones.body ? JSON.stringify(opciones.body) : undefined
+      // Solo las cabeceras imprescindibles: cada cabecera extra obliga al navegador
+      // a pedir permiso (CORS) y algunas redes o versiones lo rechazan.
+      var cabeceras = { 'Accept': 'application/vnd.github+json', 'Authorization': 'Bearer ' + token };
+      if (opciones.body) cabeceras['Content-Type'] = 'application/json';
+      var peticion;
+      try {
+        peticion = fetch(API + ruta, {
+          method: opciones.method || 'GET',
+          headers: cabeceras,
+          body: opciones.body ? JSON.stringify(opciones.body) : undefined
+        });
+      } catch (e) {
+        return Promise.reject(ErrorGitHub('token-invalido', -1));
+      }
+      return peticion.catch(function (e) {
+        // Error de red o de CORS: la petición no llegó a GitHub.
+        throw ErrorGitHub(e && e.message ? e.message : 'red', 0);
       }).then(function (r) {
         if (r.status === 204) return null;
         return r.json().catch(function () { return null; }).then(function (cuerpo) {
@@ -106,8 +114,25 @@
     return new TextDecoder().decode(bytes);
   }
 
+  // Comprueba si este navegador puede llegar a GitHub sin token (petición simple, sin CORS previo).
+  function hayConexion() {
+    return fetch(API + '/zen').then(function (r) { return r.ok || r.status === 403; }, function () { return false; });
+  }
+
+  // Quita espacios, saltos de línea y caracteres invisibles que se cuelan al copiar el token.
+  function limpiarToken(t) {
+    return String(t || '').replace(/[\s\u200B-\u200D\u2060\uFEFF]/g, '');
+  }
+
+  function tokenValido(t) {
+    return /^(github_pat_|ghp_)[A-Za-z0-9_]+$/.test(t);
+  }
+
   global.KairosGitHub = {
     crear: crear,
+    hayConexion: hayConexion,
+    limpiarToken: limpiarToken,
+    tokenValido: tokenValido,
     PREFIJO_REPO: PREFIJO_REPO,
     bytesABase64: bytesABase64,
     textoABase64: textoABase64
