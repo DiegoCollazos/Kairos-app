@@ -9,6 +9,8 @@
   var RUTA_CONFIG = 'datos/configuracion.json';
   var RUTA_EXCEL = 'datos/excel/configuracion.xlsx';
   var RUTA_PARAMETROS = 'datos/parametros.json';
+  var RUTA_SCOUTING = 'datos/scouting/ultimo.json';
+  var RUTA_REVISIONES = 'datos/scouting/revisiones.json';
   var MARGEN_MINIMO = 15;
   var PARAMETROS_DEFECTO = { margen_dias: 15, umbral_afinidad: 80 };
   var CLAVE_SESION = 'kairos.sesion';
@@ -252,7 +254,7 @@
 
   var SECCIONES = [
     { id: 'inicio', nombre: 'Inicio' },
-    { id: 'convocatorias', nombre: 'Convocatorias', pronto: true },
+    { id: 'convocatorias', nombre: 'Convocatorias' },
     { id: 'seguimiento', nombre: 'Seguimiento', pronto: true },
     { id: 'viabilidad', nombre: 'Viabilidad', pronto: true },
     { id: 'configuracion', nombre: 'Configuración' }
@@ -290,6 +292,7 @@
     var seccion = SECCIONES.filter(function (s) { return s.id === id; })[0] || SECCIONES[0];
     if (seccion.id === 'inicio') vistaInicio();
     else if (seccion.id === 'configuracion') vistaConfiguracion();
+    else if (seccion.id === 'convocatorias') vistaConvocatorias();
     else vistaPronto(seccion);
   }
 
@@ -308,11 +311,28 @@
     } else {
       cuerpo = el('div', { class: 'tarjeta' }, [
         el('h2', { style: 'font-size:19px', texto: 'Su organización en Kairós' }),
-        resumenCifras(c),
-        el('p', { class: 'ayuda', texto: 'El scouting semanal, el match y el envío de correos llegarán en los siguientes pasos.' })
+        resumenCifras(c)
       ]);
     }
-    marco('inicio', [encabezado('Hola, ' + nombre.split(' ')[0], subtituloOrg()), cuerpo]);
+    var zonaScouting = el('div');
+    marco('inicio', [encabezado('Hola, ' + nombre.split(' ')[0], subtituloOrg()), c ? zonaScouting : null, cuerpo]);
+    if (c) {
+      cargarScouting().then(function () {
+        var sc = estado.scouting;
+        if (!sc) {
+          zonaScouting.replaceChildren(el('div', { class: 'mensaje mensaje-aviso', texto: 'Todavía no hay resultados del scouting. Se ejecuta cada lunes a las 6:00 a. m.' }));
+          return;
+        }
+        var pendientes = sc.convocatorias.filter(function (cv) { return !estado.revisiones[cv.id]; }).length;
+        zonaScouting.replaceChildren(el('div', { class: 'aviso-scouting' }, [
+          el('div', { style: 'display:flex;flex-direction:column;gap:4px' }, [
+            el('strong', { texto: 'Scouting del ' + fechaLarga(sc.fecha) }),
+            el('span', { texto: sc.convocatorias.length + ' convocatorias con afinidad ≥ ' + sc.parametros.umbral + ' %; ' + pendientes + ' por revisar.' })
+          ]),
+          el('a', { class: 'btn', href: '#convocatorias', texto: 'Revisar convocatorias' })
+        ]));
+      }, function () { /* sin aviso si falla: la pantalla de convocatorias muestra el error */ });
+    }
   }
 
   function aLideres(c) {
@@ -340,6 +360,216 @@
     marco(seccion.id, [
       encabezado(seccion.nombre, subtituloOrg()),
       el('div', { class: 'tarjeta vacio', texto: 'Esta sección está en construcción.' })
+    ]);
+  }
+
+  /* ---------- vista: convocatorias ---------- */
+
+  function cargarScouting(forzar) {
+    if (estado.scouting !== undefined && !forzar) return Promise.resolve();
+    return Promise.all([
+      estado.gh.leerTexto(estado.repo, RUTA_SCOUTING),
+      estado.gh.leerTexto(estado.repo, RUTA_REVISIONES)
+    ]).then(function (archivos) {
+      estado.scouting = archivos[0] ? JSON.parse(archivos[0].texto) : null;
+      estado.revisiones = archivos[1] ? JSON.parse(archivos[1].texto) : {};
+    });
+  }
+
+  // Las decisiones se guardan en cola: un solo guardado a la vez, siempre con el estado más reciente.
+  var guardado = { enCurso: null, pendiente: false };
+  function guardarRevisiones(alTerminar) {
+    if (guardado.enCurso) { guardado.pendiente = true; return; }
+    var json = JSON.stringify(estado.revisiones, null, 2) + '\n';
+    guardado.enCurso = estado.gh.escribir(estado.repo, RUTA_REVISIONES, KairosGitHub.textoABase64(json),
+      'Kairós: revisión de convocatorias por ' + estado.usuario.login)
+      .catch(diagnosticar)
+      .then(function () { alTerminar(null); }, function (e) { alTerminar(e); })
+      .then(function () {
+        guardado.enCurso = null;
+        if (guardado.pendiente) { guardado.pendiente = false; guardarRevisiones(alTerminar); }
+      });
+  }
+
+  function vistaConvocatorias() {
+    marco('convocatorias', [encabezado('Convocatorias', subtituloOrg()), el('div', { class: 'tarjeta vacio', texto: 'Cargando el último scouting…' })]);
+    cargarScouting().then(pintarConvocatorias, function (e) {
+      marco('convocatorias', [encabezado('Convocatorias', subtituloOrg()),
+        el('div', { class: 'mensaje mensaje-error', role: 'alert', texto: mensajeError(e) })]);
+    });
+  }
+
+  function pintarConvocatorias() {
+    var sc = estado.scouting;
+    if (!sc) {
+      marco('convocatorias', [encabezado('Convocatorias', subtituloOrg()),
+        el('div', { class: 'tarjeta vacio', texto: 'Todavía no hay resultados del scouting. Se ejecuta cada lunes a las 6:00 a. m. (hora de Colombia).' })]);
+      return;
+    }
+    var filtros = estado.filtrosConv || (estado.filtrosConv = { revision: 'pendientes', ambito: 'todas', apertura: 'todas', texto: '' });
+    var lista = el('div', { class: 'lista-conv' });
+    var contador = el('p', { class: 'ayuda', 'aria-live': 'polite' });
+    var barra = el('div', { class: 'barra-envio' });
+    var zonaGuardado = el('div', { 'aria-live': 'polite' });
+
+    function decision(cv) { return estado.revisiones[cv.id] && estado.revisiones[cv.id].decision; }
+
+    function decidir(cv, valor) {
+      if (valor) estado.revisiones[cv.id] = { decision: valor, fecha: new Date().toISOString(), por: estado.usuario.login, titulo: cv.titulo };
+      else delete estado.revisiones[cv.id];
+      refrescar();
+      zonaGuardado.replaceChildren(el('p', { class: 'ayuda', texto: 'Guardando…' }));
+      guardarRevisiones(function (e) {
+        zonaGuardado.replaceChildren(e
+          ? el('div', { class: 'mensaje mensaje-error', role: 'alert', texto: 'No se pudo guardar la revisión: ' + mensajeError(e) })
+          : el('p', { class: 'ayuda', texto: 'Cambios guardados.' }));
+      });
+    }
+
+    function visible(cv) {
+      var d = decision(cv);
+      if (filtros.revision === 'pendientes' && d) return false;
+      if (filtros.revision === 'aprobadas' && d !== 'aprobada') return false;
+      if (filtros.revision === 'descartadas' && d !== 'descartada') return false;
+      if (filtros.ambito !== 'todas' && (cv.ambito || '').toLowerCase() !== filtros.ambito) return false;
+      if (filtros.apertura === 'abiertas' && cv.estado === 'proxima') return false;
+      if (filtros.apertura === 'proximas' && cv.estado !== 'proxima') return false;
+      if (filtros.texto) {
+        var t = (cv.titulo + ' ' + cv.entidad + ' ' + cv.coincidencias.map(function (m) { return m.grupo_nombre + ' ' + m.linea_nombre; }).join(' ')).toLowerCase();
+        if (t.indexOf(filtros.texto.toLowerCase()) === -1) return false;
+      }
+      return true;
+    }
+
+    function refrescar() {
+      var visibles = sc.convocatorias.filter(visible);
+      lista.replaceChildren.apply(lista, visibles.length ? visibles.map(function (cv) { return tarjetaConvocatoria(cv, decision(cv), decidir); })
+        : [el('div', { class: 'tarjeta vacio', texto: filtros.revision === 'pendientes' ? 'No quedan convocatorias por revisar con estos filtros.' : 'No hay convocatorias con estos filtros.' })]);
+      contador.textContent = 'Mostrando ' + visibles.length + ' de ' + sc.convocatorias.length + ' convocatorias.';
+      var aprobadas = sc.convocatorias.filter(function (cv) { return decision(cv) === 'aprobada'; });
+      var lideres = {};
+      aprobadas.forEach(function (cv) { cv.coincidencias.forEach(function (m) { if (m.correo) lideres[cv.id + '|' + m.correo] = true; }); });
+      barra.replaceChildren(
+        el('span', {}, [el('strong', { texto: String(aprobadas.length) }), ' aprobadas · ',
+          el('strong', { texto: String(Object.keys(lideres).length) }), ' correos a líderes cuando se active el envío']),
+        el('button', { class: 'btn', type: 'button', disabled: true, title: 'El envío de correos se construye en el siguiente paso', texto: 'Enviar correos (próximamente)' })
+      );
+    }
+
+    function selector(id, etiqueta, clave, opciones) {
+      var s = el('select', { id: id, onchange: function () { filtros[clave] = s.value; refrescar(); } },
+        opciones.map(function (o) { return el('option', { value: o[0], texto: o[1], selected: filtros[clave] === o[0] }); }));
+      return el('div', { class: 'campo' }, [el('label', { for: id, texto: etiqueta }), s]);
+    }
+    var buscar = el('input', { id: 'buscar-conv', type: 'text', placeholder: 'Título, entidad, grupo o línea', value: filtros.texto, oninput: function () { filtros.texto = buscar.value; refrescar(); } });
+
+    marco('convocatorias', [
+      encabezado('Convocatorias', 'Scouting del ' + fechaLarga(sc.fecha) + ' · afinidad ≥ ' + sc.parametros.umbral + ' % · cierre en ' + sc.parametros.margen + ' días o más'),
+      el('div', { class: 'filtros' }, [
+        selector('f-revision', 'Revisión', 'revision', [['pendientes', 'Por revisar'], ['aprobadas', 'Aprobadas'], ['descartadas', 'Descartadas'], ['todas', 'Todas']]),
+        selector('f-ambito', 'Ámbito', 'ambito', [['todas', 'Todas'], ['nacional', 'Nacionales'], ['internacional', 'Internacionales']]),
+        selector('f-apertura', 'Estado', 'apertura', [['todas', 'Todas'], ['abiertas', 'Abiertas'], ['proximas', 'Próximas a abrir']]),
+        el('div', { class: 'campo', style: 'flex:1 1 240px' }, [el('label', { for: 'buscar-conv', texto: 'Buscar' }), buscar])
+      ]),
+      contador,
+      lista,
+      zonaGuardado,
+      barra,
+      seccionDescartadas(sc)
+    ]);
+    refrescar();
+  }
+
+  function fechaCorta(iso) {
+    if (!iso) return null;
+    var d = new Date(String(iso).slice(0, 10) + 'T12:00:00');
+    return isNaN(d) ? iso : d.toLocaleDateString('es-CO', { day: 'numeric', month: 'short', year: 'numeric' });
+  }
+
+  function fechaLarga(iso) {
+    var d = new Date(String(iso).slice(0, 10) + 'T12:00:00');
+    return isNaN(d) ? iso : d.toLocaleDateString('es-CO', { day: 'numeric', month: 'long', year: 'numeric' });
+  }
+
+  function chip(texto, tipo) { return el('span', { class: 'chip' + (tipo ? ' chip-' + tipo : ''), texto: texto }); }
+
+  function tarjetaConvocatoria(cv, dec, decidir) {
+    var chips = [chip(cv.ambito || 'Sin ámbito'), chip(cv.fuente)];
+    chips.push(cv.estado === 'proxima'
+      ? chip('Abre el ' + (fechaCorta(cv.apertura) || 'fecha por confirmar'), 'proxima')
+      : cv.estado === 'abierta' ? chip('Abierta', 'ok') : chip('Estado por confirmar', 'aviso'));
+    chips.push(cv.elegibilidad === 'si' ? chip('Colombia elegible', 'ok') : chip('Elegibilidad por confirmar', 'aviso'));
+
+    var cierre = cv.cierre ? 'Cierra el ' + fechaCorta(cv.cierre) + (cv.dias_al_cierre != null ? ' (' + cv.dias_al_cierre + ' días)' : '') : 'Cierre por confirmar';
+    var grupos = [];
+    cv.coincidencias.forEach(function (m) { if (grupos.indexOf(m.grupo_nombre) === -1) grupos.push(m.grupo_nombre); });
+
+    var acciones = dec
+      ? [el('span', { class: 'estado-decision ' + (dec === 'aprobada' ? 'ok' : ''), texto: dec === 'aprobada' ? 'Aprobada para envío' : 'Descartada' }),
+         el('button', { class: 'btn-enlace', type: 'button', texto: 'Deshacer', onclick: function () { decidir(cv, null); } })]
+      : [el('button', { class: 'btn btn-sec', type: 'button', texto: 'Descartar', onclick: function () { decidir(cv, 'descartada'); } }),
+         el('button', { class: 'btn', type: 'button', texto: 'Aprobar envío', onclick: function () { decidir(cv, 'aprobada'); } })];
+
+    return el('article', { class: 'conv' + (dec === 'aprobada' ? ' conv-aprobada' : dec === 'descartada' ? ' conv-descartada' : '') }, [
+      el('div', { class: 'conv-cabeza' }, [
+        el('div', { class: 'afinidad', title: 'Afinidad máxima con una línea' }, [el('strong', { texto: cv.afinidad_max + '%' })]),
+        el('div', { class: 'conv-cuerpo' }, [
+          el('div', { class: 'chips' }, chips),
+          el('h2', {}, [el('a', { href: cv.url, target: '_blank', rel: 'noopener', texto: cv.titulo })]),
+          el('p', { class: 'ayuda', texto: [cv.entidad, cierre, cv.monto].filter(Boolean).join(' · ') }),
+          el('p', { class: 'conv-grupos' }, [el('strong', { texto: 'Grupos: ' }), grupos.join(' · ')])
+        ]),
+        el('div', { class: 'conv-acciones' }, acciones)
+      ]),
+      el('details', {}, [
+        el('summary', { texto: 'Ver objetivo, requisitos y líneas afines' }),
+        el('div', { class: 'conv-detalle' }, [
+          cv.objetivo ? el('p', {}, [el('strong', { texto: 'Objetivo: ' }), cv.objetivo]) : null,
+          cv.dirigido_a ? el('p', {}, [el('strong', { texto: 'Dirigida a: ' }), cv.dirigido_a]) : null,
+          cv.paises_elegibles ? el('p', {}, [el('strong', { texto: 'Países elegibles: ' }), cv.paises_elegibles]) : null,
+          el('div', { class: 'tabla-caja' }, [el('table', {}, [
+            el('thead', {}, [el('tr', {}, ['Afinidad', 'Grupo', 'Línea', 'Líder', 'Por qué'].map(function (t) { return el('th', { scope: 'col', texto: t }); }))]),
+            el('tbody', {}, cv.coincidencias.map(function (m) {
+              return el('tr', {}, [
+                el('td', {}, [el('strong', { texto: m.afinidad + '%' })]),
+                el('td', { texto: m.grupo + ' · ' + m.grupo_nombre }),
+                el('td', { texto: m.linea + ' · ' + m.linea_nombre }),
+                el('td', {}, [m.lider || '—', m.correo ? el('br') : null, m.correo ? el('span', { class: 'ayuda', texto: m.correo }) : null]),
+                el('td', { texto: m.razon })
+              ]);
+            }))
+          ])])
+        ])
+      ])
+    ]);
+  }
+
+  function seccionDescartadas(sc) {
+    var desc = sc.descartadas || [];
+    if (!desc.length) return null;
+    var motivos = {};
+    desc.forEach(function (d) {
+      var m = /^Triaje/.test(d.motivo) ? 'Triaje: poca relación con las líneas'
+        : /^Afinidad/.test(d.motivo) ? 'Afinidad por debajo del umbral'
+        : /^No analizada/.test(d.motivo) ? 'No analizada esta semana (se reintentará)'
+        : /^Error/.test(d.motivo) ? 'Error al analizar (se reintentará)' : d.motivo;
+      motivos[m] = (motivos[m] || 0) + 1;
+    });
+    var nacionales = desc.filter(function (d) { return !/^Unión Europea/.test(d.fuente); });
+    return el('details', { class: 'tarjeta' }, [
+      el('summary', { texto: 'Descartadas por el scouting (' + desc.length + ')' }),
+      tabla('Motivos', ['Motivo', 'Cantidad'], Object.keys(motivos).sort(function (a, b) { return motivos[b] - motivos[a]; })
+        .map(function (k) { return [k, String(motivos[k])]; })),
+      nacionales.length ? el('div', { style: 'display:flex;flex-direction:column;gap:8px' }, [
+        el('h3', { style: 'font-size:16px', texto: 'Fuentes nacionales y regionales' }),
+        el('div', { class: 'tabla-caja' }, [el('table', {}, [
+          el('thead', {}, [el('tr', {}, ['Fuente', 'Convocatoria', 'Motivo'].map(function (t) { return el('th', { scope: 'col', texto: t }); }))]),
+          el('tbody', {}, nacionales.map(function (d) {
+            return el('tr', {}, [el('td', { texto: d.fuente }), el('td', {}, [el('a', { href: d.url, target: '_blank', rel: 'noopener', texto: d.titulo })]), el('td', { texto: d.motivo })]);
+          }))
+        ])])
+      ]) : null,
+      el('p', { class: 'ayuda', texto: 'Las descartadas de la Unión Europea solo se cuentan, porque son cientos cada semana.' })
     ]);
   }
 
