@@ -32,7 +32,7 @@ button, input, select { font-family: inherit; font-size: 15px; }
 /* Campos */
 .campo { display: flex; flex-direction: column; gap: 8px; }
 .campo label { font-size: 14px; font-weight: 600; }
-.campo input[type=password], .campo input[type=text], .campo select { height: 48px; padding: 0 14px; border: 1px solid #C9CED8; border-radius: 10px; background: var(--blanco); }
+.campo input[type=password], .campo input[type=text], .campo input[type=number], .campo select { height: 48px; padding: 0 14px; border: 1px solid #C9CED8; border-radius: 10px; background: var(--blanco); }
 .ayuda { margin: 0; font-size: 13px; line-height: 1.5; color: var(--suave); }
 .check { display: flex; align-items: center; gap: 8px; font-size: 14px; min-height: 32px; }
 

@@ -8,6 +8,9 @@
 
   var RUTA_CONFIG = 'datos/configuracion.json';
   var RUTA_EXCEL = 'datos/excel/configuracion.xlsx';
+  var RUTA_PARAMETROS = 'datos/parametros.json';
+  var MARGEN_MINIMO = 15;
+  var PARAMETROS_DEFECTO = { margen_dias: 15, umbral_afinidad: 80 };
   var CLAVE_SESION = 'kairos.sesion';
 
   var estado = {
@@ -236,8 +239,12 @@
   }
 
   function cargarConfig() {
-    return estado.gh.leerTexto(estado.repo, RUTA_CONFIG).then(function (archivo) {
-      estado.config = archivo ? JSON.parse(archivo.texto) : null;
+    return Promise.all([
+      estado.gh.leerTexto(estado.repo, RUTA_CONFIG),
+      estado.gh.leerTexto(estado.repo, RUTA_PARAMETROS)
+    ]).then(function (archivos) {
+      estado.config = archivos[0] ? JSON.parse(archivos[0].texto) : null;
+      estado.parametros = Object.assign({}, PARAMETROS_DEFECTO, archivos[1] ? JSON.parse(archivos[1].texto) : {});
     });
   }
 
@@ -367,8 +374,61 @@
         ]),
         estado.escritura === false ? el('div', { class: 'mensaje mensaje-aviso', texto: 'Su token solo tiene permiso de lectura: podrá revisar el Excel pero no guardarlo.' }) : null
       ])),
+      vistaParametros(),
       zonaResultado,
       c ? vistaDatosGuardados(c) : null
+    ]);
+  }
+
+  function vistaParametros() {
+    var p = estado.parametros || PARAMETROS_DEFECTO;
+    var zona = el('div');
+    var margen = el('input', { id: 'margen', type: 'number', min: String(MARGEN_MINIMO), max: '180', step: '1', value: String(p.margen_dias), style: 'max-width:140px' });
+    var umbral = el('input', { id: 'umbral', type: 'number', min: '50', max: '100', step: '1', value: String(p.umbral_afinidad), style: 'max-width:140px' });
+    var boton = el('button', { class: 'btn', type: 'button', texto: 'Guardar parámetros', disabled: estado.escritura === false, onclick: function () {
+      var m = parseInt(margen.value, 10);
+      var u = parseInt(umbral.value, 10);
+      if (!(m >= MARGEN_MINIMO && m <= 180)) {
+        zona.replaceChildren(el('div', { class: 'mensaje mensaje-error', role: 'alert', texto: 'El margen debe ser un número de días entre ' + MARGEN_MINIMO + ' y 180.' }));
+        return;
+      }
+      if (!(u >= 50 && u <= 100)) {
+        zona.replaceChildren(el('div', { class: 'mensaje mensaje-error', role: 'alert', texto: 'La afinidad mínima debe estar entre 50 y 100.' }));
+        return;
+      }
+      var datos = { margen_dias: m, umbral_afinidad: u, actualizado: new Date().toISOString(), actualizado_por: estado.usuario.login };
+      boton.disabled = true;
+      boton.textContent = 'Guardando…';
+      estado.gh.escribir(estado.repo, RUTA_PARAMETROS, KairosGitHub.textoABase64(JSON.stringify(datos, null, 2) + '\n'), 'Kairós: parámetros del scouting actualizados por ' + estado.usuario.login)
+        .catch(diagnosticar)
+        .then(function () {
+          estado.parametros = datos;
+          boton.disabled = false;
+          boton.textContent = 'Guardar parámetros';
+          zona.replaceChildren(el('div', { class: 'mensaje mensaje-ok', texto: 'Parámetros guardados. Se aplicarán en el próximo scouting.' }));
+        }, function (e) {
+          boton.disabled = false;
+          boton.textContent = 'Guardar parámetros';
+          zona.replaceChildren(el('div', { class: 'mensaje mensaje-error', role: 'alert', texto: mensajeError(e) }));
+        });
+    } });
+    return el('section', { class: 'tarjeta' }, [
+      el('h2', { style: 'font-size:19px', texto: 'Parámetros del scouting' }),
+      el('div', { class: 'fila' }, [
+        el('div', { class: 'campo' }, [
+          el('label', { for: 'margen', texto: 'Margen mínimo hasta el cierre (días)' }),
+          margen,
+          el('p', { class: 'ayuda', texto: 'Solo se proponen convocatorias que cierren en este número de días o más. Mínimo ' + MARGEN_MINIMO + '.' })
+        ]),
+        el('div', { class: 'campo' }, [
+          el('label', { for: 'umbral', texto: 'Afinidad mínima (%)' }),
+          umbral,
+          el('p', { class: 'ayuda', texto: 'Solo se proponen convocatorias con esta afinidad o más con alguna línea. Por defecto 80.' })
+        ])
+      ]),
+      el('div', {}, [boton]),
+      p.actualizado ? el('p', { class: 'ayuda', texto: 'Última modificación: ' + fecha(p.actualizado) + (p.actualizado_por ? ' por ' + p.actualizado_por : '') + '.' }) : null,
+      zona
     ]);
   }
 
